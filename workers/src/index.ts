@@ -25,8 +25,11 @@ router
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		return await router.fetch(request, env, ctx).catch(e => {
-			console.log('error: ' + e.stack);
-			return error(e);
+			console.log(`error processing ${request.method}:${request.url}: ${e.stack}`);
+			if (e instanceof StatusError) {
+				return error(e);
+			}
+			throw e;
 		}).then(json);
 	}
 };
