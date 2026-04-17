@@ -1,14 +1,14 @@
 // Copyright 2024 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest';
-import { env, SELF } from 'cloudflare:test';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randBytes, randomishBytes, authenticateAndDecrypt, arrayEquals } from './testutil';
 import { ListResponse, R2_MAX_PAGE_SIZE } from './index';
-import { fetchMock } from 'cloudflare:test';
+import {env, exports} from 'cloudflare:workers';
 import './env.d.ts';
 
 const GCS_BUCKET: string = env.GCS_BUCKET;
+const worker = exports.default;
 
 function bucket(bucketName: string): R2Bucket {
 	if (bucketName === 'attachments') {
@@ -33,21 +33,21 @@ describe('deletes', () => {
 		const read = await toArray(await bucket(bucketName).get('abc'));
 		expect(read).toStrictEqual(new TextEncoder().encode('test'));
 
-		const res = await SELF.fetch(`http://localhost/${bucketName}/abc`, { method: 'DELETE' });
+		const res = await worker.fetch(`http://localhost/${bucketName}/abc`, { method: 'DELETE' });
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ bytesDeleted: 4 });
 		expect(await bucket(bucketName).get('abc')).toBeNull();
 	});
 
 	it('succeeds on missing objects', async () => {
-		const res = await SELF.fetch('http://localhost/attachments/fake', { method: 'DELETE' });
+		const res = await worker.fetch('http://localhost/attachments/fake', { method: 'DELETE' });
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ bytesDeleted: 0 });
 	});
 
 	it('handles on objects with / in the name', async () => {
 		await env.ATTACHMENT_BUCKET.put('abc/def', 'test');
-		const res = await SELF.fetch('http://localhost/attachments/abc/def', { method: 'DELETE' });
+		const res = await worker.fetch('http://localhost/attachments/abc/def', { method: 'DELETE' });
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ bytesDeleted: 4 });
 		expect(await env.ATTACHMENT_BUCKET.get('abc/def')).toBeNull();
@@ -68,7 +68,7 @@ describe('list', () => {
 	it('lists all objects', async () => {
 		const keys = await addObjects(prefix, 5, 'test');
 
-		const response = await SELF.fetch(`http://localhost/backups?prefix=${prefix}&limit=5`, { method: 'GET' });
+		const response = await worker.fetch(`http://localhost/backups?prefix=${prefix}&limit=5`, { method: 'GET' });
 		expect(response.status).toBe(200);
 		const res = await response.json() as ListResponse;
 		expect(res.cursor).toBeUndefined();
@@ -79,7 +79,7 @@ describe('list', () => {
 
 	it('limit larger than numObjects', async () => {
 		await addObjects(prefix, 5, 'test');
-		const response = await SELF.fetch(`http://localhost/backups/?prefix=${prefix}&limit=10`, { method: 'GET' });
+		const response = await worker.fetch(`http://localhost/backups/?prefix=${prefix}&limit=10`, { method: 'GET' });
 		expect(response.status).toBe(200);
 		const res = await response.json() as ListResponse;
 		expect(res.cursor).toBeUndefined();
@@ -89,14 +89,14 @@ describe('list', () => {
 	it('pages results', async () => {
 		const keys = await addObjects(prefix, 5, 'test');
 
-		let response = await SELF.fetch(`http://localhost/backups?prefix=${prefix}&limit=3`, { method: 'GET' });
+		let response = await worker.fetch(`http://localhost/backups?prefix=${prefix}&limit=3`, { method: 'GET' });
 		expect(response.status).toBe(200);
 		let res = await response.json() as ListResponse;
 		expect(res.cursor).toBeTruthy();
 		expect(res.objects).toHaveLength(3);
 		expect(res.objects.map(obj => obj.key)).toEqual(keys.slice(0, 3));
 
-		response = await SELF.fetch(`http://localhost/backups/?prefix=${prefix}&limit=3&cursor=${res.cursor}`, { method: 'GET' });
+		response = await worker.fetch(`http://localhost/backups/?prefix=${prefix}&limit=3&cursor=${res.cursor}`, { method: 'GET' });
 		expect(response.status).toBe(200);
 		res = await response.json() as ListResponse;
 		expect(res.cursor).toBeFalsy();
@@ -108,7 +108,7 @@ describe('list', () => {
 		await addObjects('myBackupId==/m/edia', 5, 'test');
 		await addObjects('myBackUpId==/m/edia2', 10, 'test');
 
-		const response = await SELF.fetch(
+		const response = await worker.fetch(
 			`http://localhost/backups/?prefix=${encodeURIComponent('myBackupId==/m/edia')}&limit=10`,
 			{ method: 'GET' });
 		expect(response.status).toBe(200);
@@ -122,7 +122,7 @@ describe('list', () => {
 		await addObjects('myBackupId==/m/edia', totalObjects, 'test');
 
 		// Can't return all objects because a third page would potentially bring us past our requested limit
-		let response = await SELF.fetch(
+		let response = await worker.fetch(
 			`http://localhost/backups/?prefix=${encodeURIComponent('myBackupId==/m/edia')}&limit=${totalObjects}`,
 			{ method: 'GET' });
 		expect(response.status).toBe(200);
@@ -131,7 +131,7 @@ describe('list', () => {
 		expect(res.cursor).toBeTruthy();
 
 		// List the remaining 2 objects
-		response = await SELF.fetch(
+		response = await worker.fetch(
 			`http://localhost/backups/?prefix=${encodeURIComponent('myBackupId==/m/edia')}&limit=2&cursor=${res.cursor}`,
 			{ method: 'GET' });
 		expect(response.status).toBe(200);
@@ -142,6 +142,18 @@ describe('list', () => {
 });
 
 describe('usage', async () => {
+	afterEach(async () => {
+		// Clear the backup bucket after each test
+		let cursor: string | undefined;
+		do {
+			const listed = await env.BACKUP_BUCKET.list({ cursor });
+			if (listed.objects.length > 0) {
+				await env.BACKUP_BUCKET.delete(listed.objects.map(o => o.key));
+			}
+			cursor = listed.truncated ? listed.cursor : undefined;
+		} while (cursor != null);
+	});
+
 	it('calculates usage', async () => {
 		let total = 0;
 		for (let i = 0; i < 100; i++) {
@@ -149,7 +161,7 @@ describe('usage', async () => {
 			await env.BACKUP_BUCKET.put(`prefix2/${i}`, randBytes(i));
 			total += i;
 		}
-		const response = await SELF.fetch('http://localhost/usage?prefix=prefix1', { method: 'GET' });
+		const response = await worker.fetch('http://localhost/usage?prefix=prefix1', { method: 'GET' });
 		expect(response.status).toBe(200);
 		const { bytesUsed, numObjects } = await response.json() as { bytesUsed: number, numObjects: number };
 		expect(bytesUsed).toBe(total);
@@ -157,7 +169,7 @@ describe('usage', async () => {
 	});
 
 	it('handles 0 bytesUsed', async () => {
-		const response = await SELF.fetch('http://localhost/usage?prefix=prefix1', { method: 'GET' });
+		const response = await worker.fetch('http://localhost/usage?prefix=prefix1', { method: 'GET' });
 		expect(response.status).toBe(200);
 		const { bytesUsed, numObjects } = await response.json() as { bytesUsed: number, numObjects: number };
 		expect(bytesUsed).toBe(0);
@@ -172,7 +184,7 @@ describe('usage', async () => {
 			await env.BACKUP_BUCKET.put(`prefix1/${i}`, randBytes(i));
 			total += i;
 		}
-		const response = await SELF.fetch(`http://localhost/usage?prefix=prefix1&limit=${params.limit}`, { method: 'GET' });
+		const response = await worker.fetch(`http://localhost/usage?prefix=prefix1&limit=${params.limit}`, { method: 'GET' });
 		expect(response.status).toBe(200);
 		const { bytesUsed, numObjects } = await response.json() as { bytesUsed: number, numObjects: number };
 		expect(bytesUsed).toBe(total);
@@ -181,6 +193,10 @@ describe('usage', async () => {
 });
 
 describe('copy', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	const encryptionKey = randBytes(32);
 	const hmacKey = randBytes(32);
 	const plaintext = randBytes(1024 * 3 + 7);
@@ -199,7 +215,7 @@ describe('copy', () => {
 		const request: Record<string, unknown> = validRequest();
 		delete request[missingProp];
 		const body = JSON.stringify(request);
-		const res = await SELF.fetch('http://localhost/copy', {
+		const res = await worker.fetch('http://localhost/copy', {
 			method: 'PUT',
 			body: body,
 			headers: { 'Content-Length': body.length.toString() }
@@ -211,7 +227,7 @@ describe('copy', () => {
 		const request: Record<string, unknown> = validRequest();
 		request[badprop] = 'aa&bb';
 		const body = JSON.stringify(request);
-		const res = await SELF.fetch('http://localhost/copy', {
+		const res = await worker.fetch('http://localhost/copy', {
 			method: 'PUT',
 			body: body,
 			headers: { 'Content-Length': body.length.toString() }
@@ -221,16 +237,17 @@ describe('copy', () => {
 
 	it.each(['r2', 'gcs'])('handles missing %s source object', async (scheme: string) => {
 		if (scheme === 'gcs') {
-			fetchMock.activate();
-			fetchMock.disableNetConnect();
-
-			fetchMock.get('https://storage.googleapis.com')
-				.intercept({ path: `/${GCS_BUCKET}/attachments/DoesNotExist` })
-				.reply(404);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (url === `https://storage.googleapis.com/${GCS_BUCKET}/attachments/DoesNotExist`) {
+					return new Response(null, { status: 404 });
+				}
+				throw new Error(`Unexpected fetch: ${url}`);
+			});
 		}
 		const request: Record<string, unknown> = validRequest(plaintext, 'DoesNotExist', scheme);
 		const body = JSON.stringify(request);
-		const res = await SELF.fetch('http://localhost/copy', {
+		const res = await worker.fetch('http://localhost/copy', {
 			method: 'PUT',
 			body: body,
 			headers: { 'Content-Length': body.length.toString() }
@@ -241,21 +258,24 @@ describe('copy', () => {
 	it('handles weird sourceKeys', async () => {
 		const sourceKey = '../+_../--';
 		const encoded = '..%2F%2B_..%2F--';
-		fetchMock.activate();
-		fetchMock.disableNetConnect();
 
 		const plaintext = Buffer.from(await randomishBytes(32));
-		fetchMock.get('https://storage.googleapis.com')
-			.intercept({ path: `/${GCS_BUCKET}/attachments/${encoded}` })
-			.reply(200, plaintext, {
-				headers: { 'Content-Length': plaintext.length.toString() }
-			});
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = input instanceof Request ? input.url : String(input);
+			if (url === `https://storage.googleapis.com/${GCS_BUCKET}/attachments/${encoded}`) {
+				return new Response(plaintext, {
+					status: 200,
+					headers: { 'Content-Length': plaintext.length.toString() }
+				});
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
 
 		const request = validRequest(plaintext, sourceKey, 'gcs');
 		const body = JSON.stringify(request);
-		const res = await SELF.fetch('http://localhost/copy', { method: 'PUT', body });
+		const res = await worker.fetch('http://localhost/copy', { method: 'PUT', body });
 		expect(res.status, await res.text()).toBe(204);
-		fetchMock.assertNoPendingInterceptors();
+		expect(globalThis.fetch).toHaveBeenCalledOnce();
 	});
 
 	it('rejects bad r2 sourceLength', async () => {
@@ -263,7 +283,7 @@ describe('copy', () => {
 		const request: Record<string, unknown> = validRequest();
 		request['expectedSourceLength'] = plaintext.length - 1;
 		const body = JSON.stringify(request);
-		const res = await SELF.fetch('http://localhost/copy', {
+		const res = await worker.fetch('http://localhost/copy', {
 			method: 'PUT',
 			body: body,
 			headers: { 'Content-Length': body.length.toString() }
@@ -272,25 +292,22 @@ describe('copy', () => {
 	});
 
 	it('rejects bad gcs sourceLength', async () => {
-		fetchMock.activate();
-		fetchMock.disableNetConnect();
-
-		fetchMock.get('https://storage.googleapis.com')
-			.intercept({ path: `/${GCS_BUCKET}/attachments/wrongSourceLength` })
-			.reply(200, plaintext, {
-				headers: { 'Content-Length': (plaintext.length - 1).toString() }
-			});
-
-		fetchMock.get('https://storage.googleapis.com')
-			.intercept({ path: `/${GCS_BUCKET}/attachments/missingSourceLength` })
-			.reply(200, plaintext, {});
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = input instanceof Request ? input.url : String(input);
+			if (url === `https://storage.googleapis.com/${GCS_BUCKET}/attachments/wrongSourceLength`) {
+				return new Response(plaintext, {status: 200, headers: {'Content-Length': (plaintext.length - 1).toString()}});
+			} else if (url === `https://storage.googleapis.com/${GCS_BUCKET}/attachments/missingSourceLength`) {
+				return new Response(plaintext, {status: 200});
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
 
 		let request: Record<string, unknown> = validRequest(plaintext, 'missingSourceLength', 'gcs');
-		const missingRes = await SELF.fetch('http://localhost/copy', { method: 'PUT', body: JSON.stringify(request) });
+		const missingRes = await worker.fetch('http://localhost/copy', { method: 'PUT', body: JSON.stringify(request) });
 		expect(missingRes.status, await missingRes.text()).toBe(500);
 
 		request = validRequest(plaintext, 'wrongSourceLength', 'gcs');
-		const wrongRes = await SELF.fetch('http://localhost/copy', { method: 'PUT', body: JSON.stringify(request) });
+		const wrongRes = await worker.fetch('http://localhost/copy', { method: 'PUT', body: JSON.stringify(request) });
 		expect(wrongRes.status, await wrongRes.text()).toBe(409);
 	});
 
@@ -300,7 +317,7 @@ describe('copy', () => {
 		const plaintext = await randomishBytes(plaintextLength);
 		await env.ATTACHMENT_BUCKET.put('abc', plaintext);
 		const body = JSON.stringify(validRequest(plaintext));
-		const res = await SELF.fetch('http://localhost/copy', {
+		const res = await worker.fetch('http://localhost/copy', {
 			method: 'PUT',
 			body: body
 		});
@@ -311,20 +328,22 @@ describe('copy', () => {
 	});
 
 	it.each([0, 63, 64, 1024 * 4 - 1, 1024, 1024 * 4 + 1])('copies %s bytes from GCS', async (plaintextLength: number) => {
-		fetchMock.activate();
-		fetchMock.disableNetConnect();
-
 		const plaintext = Buffer.from(await randomishBytes(plaintextLength));
-		fetchMock.get('https://storage.googleapis.com')
-			.intercept({ path: `/${GCS_BUCKET}/attachments/myKey` })
-			.reply(200, plaintext, {
-				headers: { 'Content-Length': plaintext.length.toString() }
-			});
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = input instanceof Request ? input.url : String(input);
+			if (url === `https://storage.googleapis.com/${GCS_BUCKET}/attachments/myKey`) {
+				return new Response(plaintext, {
+					status: 200,
+					headers: { 'Content-Length': plaintext.length.toString() }
+				});
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
 		const request = validRequest(plaintext, 'myKey', 'gcs');
 		const body = JSON.stringify(request);
-		const res = await SELF.fetch('http://localhost/copy', { method: 'PUT', body });
+		const res = await worker.fetch('http://localhost/copy', { method: 'PUT', body });
 		expect(res.status, await res.text()).toBe(204);
-		fetchMock.assertNoPendingInterceptors();
+		expect(globalThis.fetch).toHaveBeenCalledOnce();
 	});
 
 });
