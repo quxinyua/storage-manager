@@ -8,8 +8,6 @@
 		"module": "es2022",
 		"moduleResolution": "node",
 		"types": [
-			"@cloudflare/workers-types",
-			"vitest-environment-miniflare/globals",
 			"@cloudflare/vitest-pool-workers"
 		],
 		"resolveJsonModule": true,
