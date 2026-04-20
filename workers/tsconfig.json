@@ -6,7 +6,7 @@
 		],
 		"jsx": "react",
 		"module": "es2022",
-		"moduleResolution": "node",
+		"moduleResolution": "Bundler",
 		"types": [
 			"@cloudflare/vitest-pool-workers"
 		],
