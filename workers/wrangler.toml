@@ -16,8 +16,8 @@ routes = [
 ]
 
 # 2. 核心环境变量 (Signal 官方强烈要求的 GCS 存储桶)
-[vars]
-GCS_BUCKET = "填入你的GCS存储桶名称"
+#[vars]
+#GCS_BUCKET = "填入你的GCS存储桶名称"
 
 # 3. 绑定的 R2 存储桶
 r2_buckets = [
