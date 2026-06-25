@@ -12,7 +12,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # 1. 自动化二级域名配置
 routes = [
-  { pattern = "storage-manager.antennapro.org/*", custom_domain = true }
+  { pattern = "storage-manager.antennapro.org", custom_domain = true }
 ]
 
 # 2. 绕过 GCS 检查的占位变量（不需要真实 GCS 账户）
