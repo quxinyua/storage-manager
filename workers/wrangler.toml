@@ -19,6 +19,11 @@ routes = [
 #[vars]
 #GCS_BUCKET = "unused-gcs-bucket-place-holder"
 
+r2_buckets = [
+	{ binding = "ATTACHMENT_BUCKET", bucket_name = "antenna-v2-attachments", preview_bucket_name = "antenna-v2-attachments" },
+	{ binding = "BACKUP_BUCKET", bucket_name = "antenna-v2-backups", preview_bucket_name = "antenna-v2-backups" }
+]
+
 # 3. 绑定你已有的 R2 存储桶
 [env.production]
 name = "storage-manager"
