@@ -7,19 +7,19 @@ logpush = true
 compatibility_date = "2023-10-30"
 workers_dev = false
 
-# 必须启用，因为 Signal 使用了 Node.js crypto 的流式 HMAC
+# 必须启用，因为代码中使用了 node:crypto 模块
 compatibility_flags = ["nodejs_compat"]
 
-# 1. 绑定你的自定义域名 (替代默认的 workers.dev 域名)
+# 1. 自动化二级域名配置
 routes = [
   { pattern = "storage-manager.antennapro.org/*", custom_domain = true }
 ]
 
-# 2. 核心环境变量 (Signal 官方强烈要求的 GCS 存储桶)
-#[vars]
-#GCS_BUCKET = "填入你的GCS存储桶名称"
+# 2. 绕过 GCS 检查的占位变量（不需要真实 GCS 账户）
+[vars]
+GCS_BUCKET = "unused-gcs-bucket-place-holder"
 
-# 3. 绑定的 R2 存储桶
+# 3. 绑定你已有的 R2 存储桶
 r2_buckets = [
 	{ binding = "ATTACHMENT_BUCKET", bucket_name = "antenna-v2-attachments", preview_bucket_name = "antenna-v2-attachments" },
 	{ binding = "BACKUP_BUCKET", bucket_name = "antenna-v2-backups", preview_bucket_name = "antenna-v2-backups" }
