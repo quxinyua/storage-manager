@@ -16,10 +16,12 @@ routes = [
 ]
 
 # 2. 绕过 GCS 检查的占位变量（不需要真实 GCS 账户）
-[vars]
-GCS_BUCKET = "unused-gcs-bucket-place-holder"
+#[vars]
+#GCS_BUCKET = "unused-gcs-bucket-place-holder"
 
 # 3. 绑定你已有的 R2 存储桶
+[env.production]
+name = "storage-manager"
 r2_buckets = [
 	{ binding = "ATTACHMENT_BUCKET", bucket_name = "antenna-v2-attachments", preview_bucket_name = "antenna-v2-attachments" },
 	{ binding = "BACKUP_BUCKET", bucket_name = "antenna-v2-backups", preview_bucket_name = "antenna-v2-backups" }
